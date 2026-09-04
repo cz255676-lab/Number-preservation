@@ -1634,76 +1634,313 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    let tgToken = env.TG_BOT_TOKEN;
-    let tgChat = env.TG_CHAT_ID;
-    try {
-      if (!tgToken) tgToken = await env.ESIM_DB.get("TG_BOT_TOKEN");
-      if (!tgChat) tgChat = await env.ESIM_DB.get("TG_CHAT_ID");
-    } catch (e) {}
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const UTC8_MS = 8 * 60 * 60 * 1000;
+    const PAGE_BODY_LIMIT = 3000;
 
-    const esims = await env.ESIM_DB.get("esim_list", { type: "json" });
-    if (!esims || esims.length === 0) return; 
+    const escapeTelegramHtml = (value) =>
+      String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 
-    const today = new Date();
-    const offset = 8; 
-    const localToday = new Date(today.getTime() + offset * 3600 * 1000);
-    localToday.setUTCHours(0, 0, 0, 0);
+    const clip = (value, maxLength = 120) => {
+      const text = String(value ?? "").trim();
+      return text.length > maxLength
+        ? `${text.slice(0, maxLength - 1)}…`
+        : text;
+    };
 
-    let messages = [];
-
-    esims.forEach(sim => {
-      const expDate = new Date(sim.expireDate);
-      expDate.setUTCHours(0, 0, 0, 0); 
-      
-      const diffTime = expDate - localToday;
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
-      const cycleText = sim.cycle ? `${sim.cycle}天` : '未设置';
-      const remarkText = sim.remark ? `\n📝 备注: ${sim.remark}` : ''; 
-      const platformsText = sim.platforms ? `\n🌐 平台: ${sim.platforms}` : ''; 
-
-      // 动态解析自定义提醒规则，采用极其高效的数学推演判定算法（无需在数据库读写记录次数的脏状态）
-      const advance = sim.notifyAdvance !== undefined && sim.notifyAdvance !== "" ? parseInt(sim.notifyAdvance) : 15;
-      const interval = sim.notifyInterval !== undefined && sim.notifyInterval !== "" ? parseInt(sim.notifyInterval) : 1;
-      const maxCount = sim.notifyCount !== undefined && sim.notifyCount !== "" ? parseInt(sim.notifyCount) : 0;
-
-      if (diffDays <= advance && diffDays > 0) {
-        const passedDays = advance - diffDays;
-        
-        // 当过去的天数正好是间隔的倍数时，触发当次校验
-        if (passedDays % interval === 0) {
-            let shouldNotify = false;
-            let currentCount = Math.floor(passedDays / interval) + 1;
-            
-            // 校验是否超出了允许的最大提醒次数
-            if (maxCount === 0 || currentCount <= maxCount) {
-                shouldNotify = true;
-            }
-
-            if (shouldNotify) {
-                let notifyProgress = maxCount > 0 ? ` (第 ${currentCount}/${maxCount} 次)` : '';
-                messages.push(`⚠️ 【eSIM 保号提醒】${notifyProgress}\n📱 卡名: ${sim.name}\n📞 号码: ${sim.number || '未填写'}\n🔄 周期: ${cycleText}\n📅 到期: ${sim.expireDate}${remarkText}${platformsText}\n⏳ 剩余: ${diffDays} 天！\n👉 请尽快处理续期！`);
-            }
-        }
-      } else if (diffDays === 0) {
-        messages.push(`🚨 【eSIM 紧急提醒】\n📱 卡名: ${sim.name} 今天到期！${remarkText}${platformsText}`);
-      } else if (diffDays < 0 && Math.abs(diffDays) % 7 === 0) {
-        messages.push(`❌ 【eSIM 停机警告】\n📱 卡名: ${sim.name} 已过期 ${Math.abs(diffDays)} 天。${remarkText}${platformsText}`);
+    const readSecret = async (binding) => {
+      if (typeof binding === "string") return binding.trim();
+      if (binding && typeof binding.get === "function") {
+        const value = await binding.get();
+        return String(value ?? "").trim();
       }
+      return "";
+    };
+
+    const maskPhone = (value) => {
+      const raw = String(value ?? "").trim();
+      if (!raw) return "未填写";
+
+      const digits = raw.replace(/\D/g, "");
+      if (!digits) return "已隐藏";
+
+      const plus = raw.startsWith("+") ? "+" : "";
+      if (digits.length <= 4) {
+        return plus + "•".repeat(digits.length);
+      }
+
+      const hiddenLength = Math.max(4, Math.min(8, digits.length - 4));
+      return `${plus}${"•".repeat(hiddenLength)}${digits.slice(-4)}`;
+    };
+
+    const parseInteger = (value, fallback, minimum) => {
+      const parsed = Number.parseInt(value, 10);
+      return Number.isInteger(parsed) && parsed >= minimum
+        ? parsed
+        : fallback;
+    };
+
+    const parseExpiryDay = (value) => {
+      const text = String(value ?? "").trim();
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+      if (!match) return null;
+
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const timestamp = Date.UTC(year, month - 1, day);
+      const check = new Date(timestamp);
+
+      if (
+        check.getUTCFullYear() !== year ||
+        check.getUTCMonth() !== month - 1 ||
+        check.getUTCDate() !== day
+      ) {
+        return null;
+      }
+
+      return Math.floor(timestamp / DAY_MS);
+    };
+
+    const packBlocks = (blocks, limit) => {
+      const pages = [];
+      let current = "";
+
+      for (const block of blocks) {
+        if (block.length > limit) {
+          throw new Error("A Telegram message block is unexpectedly too long");
+        }
+
+        const next = current ? `${current}\n\n${block}` : block;
+        if (next.length > limit) {
+          pages.push(current);
+          current = block;
+        } else {
+          current = next;
+        }
+      }
+
+      if (current) pages.push(current);
+      return pages;
+    };
+
+    if (!env.ESIM_DB) {
+      throw new Error("Missing ESIM_DB binding");
+    }
+
+    let tgToken = await readSecret(env.TG_BOT_TOKEN);
+    let tgChat = await readSecret(env.TG_CHAT_ID);
+
+    if (!tgToken) {
+      tgToken = String((await env.ESIM_DB.get("TG_BOT_TOKEN")) ?? "").trim();
+    }
+    if (!tgChat) {
+      tgChat = String((await env.ESIM_DB.get("TG_CHAT_ID")) ?? "").trim();
+    }
+
+    if (!tgToken || !tgChat) {
+      const missing = [];
+      if (!tgToken) missing.push("TG_BOT_TOKEN");
+      if (!tgChat) missing.push("TG_CHAT_ID");
+      throw new Error(`Missing Telegram configuration: ${missing.join(", ")}`);
+    }
+
+    const storedEsims = await env.ESIM_DB.get("esim_list", { type: "json" });
+    const esims = Array.isArray(storedEsims) ? storedEsims : [];
+
+    const localToday = new Date(Date.now() + UTC8_MS);
+    localToday.setUTCHours(0, 0, 0, 0);
+    const todayDay = Math.floor(localToday.getTime() / DAY_MS);
+    const dateLabel = localToday.toISOString().slice(0, 10);
+
+    const entries = esims
+      .map((raw, index) => {
+        const sim = raw && typeof raw === "object" ? raw : {};
+        const expireDate = clip(sim.expireDate, 20) || "未设置";
+        const expiryDay = parseExpiryDay(expireDate);
+        const diffDays = expiryDay === null ? null : expiryDay - todayDay;
+
+        return {
+          sim,
+          originalIndex: index,
+          name: clip(sim.name, 80) || `未命名卡 ${index + 1}`,
+          maskedNumber: maskPhone(sim.number),
+          expireDate,
+          diffDays,
+          advance: parseInteger(sim.notifyAdvance, 15, 0),
+          interval: parseInteger(sim.notifyInterval, 1, 1),
+          maxCount: parseInteger(sim.notifyCount, 0, 0)
+        };
+      })
+      .sort((a, b) => {
+        const aDays = a.diffDays === null
+          ? Number.POSITIVE_INFINITY
+          : a.diffDays;
+        const bDays = b.diffDays === null
+          ? Number.POSITIVE_INFINITY
+          : b.diffDays;
+        return aDays - bDays;
+      });
+
+    const getStatus = (entry) => {
+      if (entry.diffDays === null) {
+        return { status: "⚪ 日期无效", remaining: "剩余天数：无法计算" };
+      }
+      if (entry.diffDays < 0) {
+        return {
+          status: "🔴 已过期",
+          remaining: `已过期 ${Math.abs(entry.diffDays)} 天`
+        };
+      }
+      if (entry.diffDays === 0) {
+        return { status: "🔴 今日到期", remaining: "今天到期" };
+      }
+      if (entry.diffDays <= entry.advance) {
+        return {
+          status: "🟠 即将到期",
+          remaining: `剩余 ${entry.diffDays} 天`
+        };
+      }
+
+      const warningLimit = Math.max(45, entry.advance + 15);
+      if (entry.diffDays <= warningLimit) {
+        return {
+          status: "🟡 建议关注",
+          remaining: `剩余 ${entry.diffDays} 天`
+        };
+      }
+
+      return {
+        status: "🟢 正常",
+        remaining: `剩余 ${entry.diffDays} 天`
+      };
+    };
+
+    const bodyBlocks = entries.map((entry, index) => {
+      const info = getStatus(entry);
+      return [
+        `<b>${index + 1}. ${escapeTelegramHtml(entry.name)}</b>`,
+        `📞 号码：<code>${escapeTelegramHtml(entry.maskedNumber)}</code>`,
+        `📅 到期：${escapeTelegramHtml(entry.expireDate)}`,
+        `⏳ ${info.remaining}`,
+        `📌 状态：${info.status}`
+      ].join("\n");
     });
 
-    if (messages.length > 0 && tgToken && tgChat) {
-      const text = messages.join("\n\n---\n\n");
-      const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
-      await fetch(tgUrl, {
+    if (bodyBlocks.length === 0) {
+      bodyBlocks.push("ℹ️ 当前没有 eSIM 记录。");
+    }
+
+    const alertBlocks = [];
+    for (const entry of entries) {
+      if (entry.diffDays === null) continue;
+
+      const cycleValue = clip(entry.sim.cycle, 16);
+      const cycleText = cycleValue ? `${cycleValue}天` : "未设置";
+      const remark = clip(entry.sim.remark, 300);
+      const platforms = clip(entry.sim.platforms, 200);
+      const details = [
+        `📱 卡名：${escapeTelegramHtml(entry.name)}`,
+        `📞 号码：<code>${escapeTelegramHtml(entry.maskedNumber)}</code>`,
+        `🔄 周期：${escapeTelegramHtml(cycleText)}`,
+        `📅 到期：${escapeTelegramHtml(entry.expireDate)}`
+      ];
+
+      if (remark) {
+        details.push(`📝 备注：${escapeTelegramHtml(remark)}`);
+      }
+      if (platforms) {
+        details.push(`🌐 平台：${escapeTelegramHtml(platforms)}`);
+      }
+
+      if (entry.diffDays > 0 && entry.diffDays <= entry.advance) {
+        const passedDays = entry.advance - entry.diffDays;
+        if (passedDays % entry.interval === 0) {
+          const currentCount =
+            Math.floor(passedDays / entry.interval) + 1;
+
+          if (entry.maxCount === 0 || currentCount <= entry.maxCount) {
+            const progress = entry.maxCount > 0
+              ? `（第 ${currentCount}/${entry.maxCount} 次）`
+              : "";
+
+            alertBlocks.push([
+              `⚠️ <b>eSIM 保号提醒${progress}</b>`,
+              ...details,
+              `⏳ 剩余 ${entry.diffDays} 天，请尽快处理续期。`
+            ].join("\n"));
+          }
+        }
+      } else if (entry.diffDays === 0) {
+        alertBlocks.push([
+          "🚨 <b>eSIM 紧急提醒</b>",
+          ...details,
+          "⏳ 今天到期，请立即处理。"
+        ].join("\n"));
+      } else if (
+        entry.diffDays < 0 &&
+        Math.abs(entry.diffDays) % 7 === 0
+      ) {
+        alertBlocks.push([
+          "❌ <b>eSIM 停机警告</b>",
+          ...details,
+          `⏳ 已过期 ${Math.abs(entry.diffDays)} 天。`
+        ].join("\n"));
+      }
+    }
+
+    if (alertBlocks.length > 0) {
+      bodyBlocks.push(
+        "🔔 <b>今日触发的到期提醒</b>",
+        ...alertBlocks
+      );
+    } else if (entries.length > 0) {
+      bodyBlocks.push("✅ 今日没有触发额外到期提醒。");
+    }
+
+    const pages = packBlocks(bodyBlocks, PAGE_BODY_LIMIT);
+    const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
+
+    for (let index = 0; index < pages.length; index++) {
+      const pageLabel = pages.length > 1
+        ? `\n📄 分页：${index + 1}/${pages.length}`
+        : "";
+      const text = [
+        "📋 <b>eSIM 每日汇总</b>",
+        `🗓 日期：${dateLabel}`,
+        `📦 卡片：${entries.length} 张${pageLabel}`,
+        "",
+        pages[index]
+      ].join("\n");
+
+      const response = await fetch(tgUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          chat_id: tgChat, 
-          text: text, 
-          parse_mode: "HTML" 
+        body: JSON.stringify({
+          chat_id: tgChat,
+          text,
+          parse_mode: "HTML"
         })
       });
+
+      let result = null;
+      try {
+        result = await response.json();
+      } catch (error) {}
+
+      if (!response.ok || !result || !result.ok) {
+        const description = result && result.description
+          ? result.description
+          : `HTTP ${response.status}`;
+        throw new Error(`Telegram sendMessage failed: ${description}`);
+      }
+
+      if (index < pages.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+      }
     }
   }
 };
