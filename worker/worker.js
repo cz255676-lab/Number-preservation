@@ -239,7 +239,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 </div>
                 <div class="mb-6">
                     <label class="block text-gray-700 text-sm font-bold mb-2">充值链接 (选填)</label>
-                    <input type="url" id="simRechargeUrl" maxlength="2048" placeholder="https://运营商充值页面" autocomplete="off" class="w-full px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/80">
+                    <input type="url" id="simRechargeUrl" maxlength="512" placeholder="https://运营商充值页面" autocomplete="off" class="w-full px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/80">
                     <p class="text-xs text-gray-500 mt-1.5">填写后，Telegram 提醒消息下方会显示“充值”按钮。</p>
                 </div>
                 
@@ -1456,7 +1456,7 @@ function normalizeRechargeUrl(value, strict = true) {
   };
 
   if (
-    raw.length > 2048 ||
+    raw.length > 512 ||
     /[\u0000-\u001F\u007F\s\\]/.test(raw)
   ) {
     return fail();
@@ -1473,24 +1473,27 @@ function normalizeRechargeUrl(value, strict = true) {
     parsed.protocol !== "https:" ||
     parsed.username ||
     parsed.password ||
-    (parsed.port && parsed.port !== "443")
+    (parsed.port && parsed.port !== "443") ||
+    parsed.search
   ) {
     return fail();
   }
 
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const domainPattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+  const blockedShorteners = new Set([
+    "bit.ly", "cutt.ly", "is.gd", "rebrand.ly", "shorturl.at",
+    "t.co", "tiny.cc", "tinyurl.com"
+  ]);
   const privateHost =
     !host ||
+    !domainPattern.test(host) ||
+    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ||
+    host.includes(":") ||
+    blockedShorteners.has(host) ||
     host === "localhost" ||
     host.endsWith(".localhost") ||
-    host.endsWith(".local") ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    host === "::1" ||
-    /^(fc|fd|fe8|fe9|fea|feb)/i.test(host);
+    host.endsWith(".local");
   if (privateHost) return fail();
 
   parsed.hash = "";
