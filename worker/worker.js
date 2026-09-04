@@ -1581,10 +1581,7 @@ export default {
           const text = String(value ?? "").trim();
           return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
         };
-        const maskPhone = (value) => {
-          const digits = String(value ?? "").replace(/\D/g, "");
-          return digits ? `••••${digits.slice(-4)}` : "未填写";
-        };
+        const displayPhone = (value) => clip(value, 40) || "未填写";
 
         const localNow = new Date(Date.now() + UTC8_MS);
         const localIso = localNow.toISOString();
@@ -1600,9 +1597,21 @@ export default {
           const name = clip(sim.name, 80) || `未命名卡 ${index + 1}`;
           const expireDate = clip(sim.expireDate, 20) || "未设置";
           const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(expireDate);
-          const expiryDay = match
-            ? Math.floor(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / DAY_MS)
-            : null;
+          let expiryDay = null;
+          if (match) {
+            const year = Number(match[1]);
+            const month = Number(match[2]);
+            const day = Number(match[3]);
+            const timestamp = Date.UTC(year, month - 1, day);
+            const check = new Date(timestamp);
+            if (
+              check.getUTCFullYear() === year &&
+              check.getUTCMonth() === month - 1 &&
+              check.getUTCDate() === day
+            ) {
+              expiryDay = Math.floor(timestamp / DAY_MS);
+            }
+          }
           const diffDays = expiryDay === null ? null : expiryDay - todayDay;
           const advanceParsed = Number.parseInt(sim.notifyAdvance, 10);
           const advance = Number.isInteger(advanceParsed) && advanceParsed >= 0 ? advanceParsed : 15;
@@ -1617,7 +1626,7 @@ export default {
 
           const lines = [
             `<b>${index + 1}. ${escapeTelegramHtml(name)}</b>`,
-            `📞 号码：<code>${escapeTelegramHtml(maskPhone(sim.number))}</code>`,
+            `📞 号码：<code>${escapeTelegramHtml(displayPhone(sim.number))}</code>`,
             `📅 到期：${escapeTelegramHtml(expireDate)}`,
             `⏳ ${escapeTelegramHtml(statusLine)}`
           ];
@@ -1662,7 +1671,7 @@ export default {
       } catch (err) {
         return new Response(JSON.stringify({
           success: false,
-          message: err.message || "测试提醒发送失败"
+          message: "测试提醒发送失败，请稍后重试"
         }), {
           status: 500,
           headers: { "Content-Type": "application/json", ...corsHeaders }
@@ -1829,21 +1838,8 @@ export default {
       return "";
     };
 
-    const maskPhone = (value) => {
-      const raw = String(value ?? "").trim();
-      if (!raw) return "未填写";
-
-      const digits = raw.replace(/\D/g, "");
-      if (!digits) return "已隐藏";
-
-      const plus = raw.startsWith("+") ? "+" : "";
-      if (digits.length <= 4) {
-        return plus + "•".repeat(digits.length);
-      }
-
-      const hiddenLength = Math.max(4, Math.min(8, digits.length - 4));
-      return `${plus}${"•".repeat(hiddenLength)}${digits.slice(-4)}`;
-    };
+    // 用户明确选择在 Telegram 提醒中显示完整号码。
+    const displayPhone = (value) => clip(value, 40) || "未填写";
 
     const parseInteger = (value, fallback, minimum) => {
       const parsed = Number.parseInt(value, 10);
@@ -1936,7 +1932,7 @@ export default {
           sim,
           originalIndex: index,
           name: clip(sim.name, 80) || `未命名卡 ${index + 1}`,
-          maskedNumber: maskPhone(sim.number),
+          displayNumber: displayPhone(sim.number),
           expireDate,
           diffDays,
           advance: parseInteger(sim.notifyAdvance, 15, 0),
@@ -1992,7 +1988,7 @@ export default {
       const info = getStatus(entry);
       return [
         `<b>${index + 1}. ${escapeTelegramHtml(entry.name)}</b>`,
-        `📞 号码：<code>${escapeTelegramHtml(entry.maskedNumber)}</code>`,
+        `📞 号码：<code>${escapeTelegramHtml(entry.displayNumber)}</code>`,
         `📅 到期：${escapeTelegramHtml(entry.expireDate)}`,
         `⏳ ${info.remaining}`,
         `📌 状态：${info.status}`
@@ -2013,7 +2009,7 @@ export default {
       const platforms = clip(entry.sim.platforms, 200);
       const details = [
         `📱 卡名：${escapeTelegramHtml(entry.name)}`,
-        `📞 号码：<code>${escapeTelegramHtml(entry.maskedNumber)}</code>`,
+        `📞 号码：<code>${escapeTelegramHtml(entry.displayNumber)}</code>`,
         `🔄 周期：${escapeTelegramHtml(cycleText)}`,
         `📅 到期：${escapeTelegramHtml(entry.expireDate)}`
       ];
