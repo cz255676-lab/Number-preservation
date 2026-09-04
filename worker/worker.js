@@ -237,6 +237,11 @@ const HTML_CONTENT = `<!DOCTYPE html>
                     <label class="block text-gray-700 text-sm font-bold mb-2">备注 / 保号要求 (选填)</label>
                     <input type="text" id="simRemark" placeholder="例如：发送短信到某号码 或 充值5元" class="w-full px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/80">
                 </div>
+                <div class="mb-6">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">充值链接 (选填)</label>
+                    <input type="url" id="simRechargeUrl" maxlength="2048" placeholder="https://运营商充值页面" autocomplete="off" class="w-full px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/80">
+                    <p class="text-xs text-gray-500 mt-1.5">填写后，Telegram 提醒消息下方会显示“充值”按钮。</p>
+                </div>
                 
                 <button type="submit" id="submitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-colors">
                     保存并监控
@@ -654,7 +659,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                     throw new Error(data.message || '发送失败');
                 }
 
-                showToast('测试提醒已发送一次');
+                showToast('测试提醒已发送（每张卡一条，共 ' + (data.sent || 0) + ' 条）');
             } catch (error) {
                 alert('发送失败：' + (error.message || '请稍后重试'));
             } finally {
@@ -865,6 +870,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 cycle: parseInt(document.getElementById('simCycle').value) || 0,
                 platforms: document.getElementById('simPlatforms').value, 
                 remark: document.getElementById('simRemark').value,
+                rechargeUrl: document.getElementById('simRechargeUrl').value.trim(),
                 expireDate: document.getElementById('simExpire').value,
                 notifyAdvance: document.getElementById('simNotifyAdvance').value,
                 notifyInterval: document.getElementById('simNotifyInterval').value,
@@ -883,12 +889,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 });
                 
                 if (response.status === 401) { logout(); return; }
+                const data = await response.json().catch(() => ({}));
                 if (response.ok) {
                     closeModal();
                     showToast(editingId ? "修改卡片成功" : "添加卡片成功");
                     await fetchEsimData(); 
                 } else {
-                    alert("保存失败，请检查数据。");
+                    alert(data.message || "保存失败，请检查数据。");
                 }
             } catch (error) {
                 alert("网络错误，保存失败。");
@@ -1406,6 +1413,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             document.getElementById('simCycle').value = sim.cycle || '';
             document.getElementById('simPlatforms').value = sim.platforms || ''; 
             document.getElementById('simRemark').value = sim.remark || '';
+            document.getElementById('simRechargeUrl').value = sim.rechargeUrl || '';
             document.getElementById('simExpire').value = sim.expireDate || '';
             
             document.getElementById('simNotifyAdvance').value = sim.notifyAdvance !== undefined ? sim.notifyAdvance : '';
@@ -1437,6 +1445,57 @@ const HTML_CONTENT = `<!DOCTYPE html>
     </script>
 </body>
 </html>`;
+
+function normalizeRechargeUrl(value, strict = true) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  const fail = () => {
+    if (strict) throw new Error("充值链接必须是公开的 HTTPS 地址");
+    return "";
+  };
+
+  if (
+    raw.length > 2048 ||
+    /[\u0000-\u001F\u007F\s\\]/.test(raw)
+  ) {
+    return fail();
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch (error) {
+    return fail();
+  }
+
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    (parsed.port && parsed.port !== "443")
+  ) {
+    return fail();
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const privateHost =
+    !host ||
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    host === "::1" ||
+    /^(fc|fd|fe8|fe9|fea|feb)/i.test(host);
+  if (privateHost) return fail();
+
+  parsed.hash = "";
+  return parsed.href;
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -1592,7 +1651,7 @@ export default {
           localNow.getUTCDate()
         ) / DAY_MS);
 
-        const cards = esims.slice(0, 10).map((raw, index) => {
+        const cardItems = esims.slice(0, 10).map((raw, index) => {
           const sim = raw && typeof raw === "object" ? raw : {};
           const name = clip(sim.name, 80) || `未命名卡 ${index + 1}`;
           const expireDate = clip(sim.expireDate, 20) || "未设置";
@@ -1635,37 +1694,47 @@ export default {
           const platforms = clip(sim.platforms, 160);
           if (remark) lines.push(`📝 备注：${escapeTelegramHtml(remark)}`);
           if (platforms) lines.push(`🌐 平台：${escapeTelegramHtml(platforms)}`);
-          return lines.join("\n");
+          return {
+            text: lines.join("\n"),
+            rechargeUrl: normalizeRechargeUrl(sim.rechargeUrl, false)
+          };
         });
-
-        if (esims.length > cards.length) {
-          cards.push(`ℹ️ 另有 ${esims.length - cards.length} 张卡片未在本次测试中展开。`);
-        }
-
-        const text = [
-          "🔔 <b>eSIM 到期提醒（手动测试）</b>",
-          `🗓 发送时间：${dateTimeLabel}（北京时间）`,
-          "✅ 本消息只发送一次，不会改变定时提醒设置。",
-          "",
-          ...cards
-        ].join("\n\n");
-
-        if (text.length > 4000) {
-          throw new Error("测试消息内容过长");
-        }
 
         const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
-        const tgRes = await fetch(tgUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: tgChat, text, parse_mode: "HTML" })
-        });
-        const tgResult = await tgRes.json().catch(() => null);
-        if (!tgRes.ok || !tgResult || !tgResult.ok) {
-          throw new Error("Telegram 拒绝了消息");
+        for (let index = 0; index < cardItems.length; index++) {
+          const item = cardItems[index];
+          const text = [
+            "🔔 <b>eSIM 到期提醒（手动测试）</b>",
+            `🗓 发送时间：${dateTimeLabel}（北京时间）`,
+            `📋 卡片：${index + 1}/${cardItems.length}`,
+            "✅ 本消息只发送一次，不会改变定时提醒设置。",
+            "",
+            item.text
+          ].join("\n");
+
+          const payload = { chat_id: tgChat, text, parse_mode: "HTML" };
+          if (item.rechargeUrl) {
+            payload.reply_markup = {
+              inline_keyboard: [[{ text: "充值", url: item.rechargeUrl }]]
+            };
+          }
+
+          const tgRes = await fetch(tgUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const tgResult = await tgRes.json().catch(() => null);
+          if (!tgRes.ok || !tgResult || !tgResult.ok) {
+            throw new Error("Telegram 拒绝了消息");
+          }
+
+          if (index < cardItems.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1100));
+          }
         }
 
-        return new Response(JSON.stringify({ success: true }), {
+        return new Response(JSON.stringify({ success: true, sent: cardItems.length }), {
           headers: { "Content-Type": "application/json", ...corsHeaders }
         });
       } catch (err) {
@@ -1703,6 +1772,11 @@ export default {
         try {
           const newSim = await request.json();
           if (!newSim.name || !newSim.expireDate) return new Response(JSON.stringify({ success: false, message: "参数错误" }), { status: 400, headers: corsHeaders });
+          try {
+            newSim.rechargeUrl = normalizeRechargeUrl(newSim.rechargeUrl);
+          } catch (error) {
+            return new Response(JSON.stringify({ success: false, message: "充值链接必须是公开的 https:// 地址" }), { status: 400, headers: corsHeaders });
+          }
           newSim.id = Date.now().toString(); 
           esims.push(newSim);
           await env.ESIM_DB.put("esim_list", JSON.stringify(esims)); 
@@ -1712,7 +1786,15 @@ export default {
 
       if (request.method === "PUT") {
         try {
-          const { id, expireDate, name, number, cycle, remark, platforms, notifyAdvance, notifyInterval, notifyCount } = await request.json();
+          const { id, expireDate, name, number, cycle, remark, platforms, rechargeUrl, notifyAdvance, notifyInterval, notifyCount } = await request.json();
+          let normalizedRechargeUrl;
+          try {
+            normalizedRechargeUrl = rechargeUrl === undefined
+              ? undefined
+              : normalizeRechargeUrl(rechargeUrl);
+          } catch (error) {
+            return new Response(JSON.stringify({ success: false, message: "充值链接必须是公开的 https:// 地址" }), { status: 400, headers: corsHeaders });
+          }
           let found = false;
           esims = esims.map(sim => {
             if (sim.id === id) { 
@@ -1723,6 +1805,7 @@ export default {
                 if (cycle !== undefined) sim.cycle = cycle;
                 if (remark !== undefined) sim.remark = remark;
                 if (platforms !== undefined) sim.platforms = platforms; 
+                if (normalizedRechargeUrl !== undefined) sim.rechargeUrl = normalizedRechargeUrl;
                 if (notifyAdvance !== undefined) sim.notifyAdvance = notifyAdvance;
                 if (notifyInterval !== undefined) sim.notifyInterval = notifyInterval;
                 if (notifyCount !== undefined) sim.notifyCount = notifyCount;
@@ -1814,7 +1897,6 @@ export default {
   async scheduled(event, env, ctx) {
     const DAY_MS = 24 * 60 * 60 * 1000;
     const UTC8_MS = 8 * 60 * 60 * 1000;
-    const PAGE_BODY_LIMIT = 3000;
 
     const escapeTelegramHtml = (value) =>
       String(value ?? "")
@@ -1868,28 +1950,6 @@ export default {
       }
 
       return Math.floor(timestamp / DAY_MS);
-    };
-
-    const packBlocks = (blocks, limit) => {
-      const pages = [];
-      let current = "";
-
-      for (const block of blocks) {
-        if (block.length > limit) {
-          throw new Error("A Telegram message block is unexpectedly too long");
-        }
-
-        const next = current ? `${current}\n\n${block}` : block;
-        if (next.length > limit) {
-          pages.push(current);
-          current = block;
-        } else {
-          current = next;
-        }
-      }
-
-      if (current) pages.push(current);
-      return pages;
     };
 
     if (!env.ESIM_DB) {
@@ -1950,56 +2010,7 @@ export default {
         return aDays - bDays;
       });
 
-    const getStatus = (entry) => {
-      if (entry.diffDays === null) {
-        return { status: "⚪ 日期无效", remaining: "剩余天数：无法计算" };
-      }
-      if (entry.diffDays < 0) {
-        return {
-          status: "🔴 已过期",
-          remaining: `已过期 ${Math.abs(entry.diffDays)} 天`
-        };
-      }
-      if (entry.diffDays === 0) {
-        return { status: "🔴 今日到期", remaining: "今天到期" };
-      }
-      if (entry.diffDays <= entry.advance) {
-        return {
-          status: "🟠 即将到期",
-          remaining: `剩余 ${entry.diffDays} 天`
-        };
-      }
-
-      const warningLimit = Math.max(45, entry.advance + 15);
-      if (entry.diffDays <= warningLimit) {
-        return {
-          status: "🟡 建议关注",
-          remaining: `剩余 ${entry.diffDays} 天`
-        };
-      }
-
-      return {
-        status: "🟢 正常",
-        remaining: `剩余 ${entry.diffDays} 天`
-      };
-    };
-
-    const bodyBlocks = entries.map((entry, index) => {
-      const info = getStatus(entry);
-      return [
-        `<b>${index + 1}. ${escapeTelegramHtml(entry.name)}</b>`,
-        `📞 号码：<code>${escapeTelegramHtml(entry.displayNumber)}</code>`,
-        `📅 到期：${escapeTelegramHtml(entry.expireDate)}`,
-        `⏳ ${info.remaining}`,
-        `📌 状态：${info.status}`
-      ].join("\n");
-    });
-
-    if (bodyBlocks.length === 0) {
-      bodyBlocks.push("ℹ️ 当前没有 eSIM 记录。");
-    }
-
-    const alertBlocks = [];
+    const alertItems = [];
     for (const entry of entries) {
       if (entry.diffDays === null) continue;
 
@@ -2032,59 +2043,65 @@ export default {
               ? `（第 ${currentCount}/${entry.maxCount} 次）`
               : "";
 
-            alertBlocks.push([
-              `⚠️ <b>eSIM 保号提醒${progress}</b>`,
-              ...details,
-              `⏳ 剩余 ${entry.diffDays} 天，请尽快处理续期。`
-            ].join("\n"));
+            alertItems.push({
+              text: [
+                `⚠️ <b>eSIM 保号提醒${progress}</b>`,
+                ...details,
+                `⏳ 剩余 ${entry.diffDays} 天，请尽快处理续期。`
+              ].join("\n"),
+              rechargeUrl: normalizeRechargeUrl(entry.sim.rechargeUrl, false)
+            });
           }
         }
       } else if (entry.diffDays === 0) {
-        alertBlocks.push([
-          "🚨 <b>eSIM 紧急提醒</b>",
-          ...details,
-          "⏳ 今天到期，请立即处理。"
-        ].join("\n"));
+        alertItems.push({
+          text: [
+            "🚨 <b>eSIM 紧急提醒</b>",
+            ...details,
+            "⏳ 今天到期，请立即处理。"
+          ].join("\n"),
+          rechargeUrl: normalizeRechargeUrl(entry.sim.rechargeUrl, false)
+        });
       } else if (
         entry.diffDays < 0 &&
         Math.abs(entry.diffDays) % 7 === 0
       ) {
-        alertBlocks.push([
-          "❌ <b>eSIM 停机警告</b>",
-          ...details,
-          `⏳ 已过期 ${Math.abs(entry.diffDays)} 天。`
-        ].join("\n"));
+        alertItems.push({
+          text: [
+            "❌ <b>eSIM 停机警告</b>",
+            ...details,
+            `⏳ 已过期 ${Math.abs(entry.diffDays)} 天。`
+          ].join("\n"),
+          rechargeUrl: normalizeRechargeUrl(entry.sim.rechargeUrl, false)
+        });
       }
     }
 
     // 仅在命中卡片的到期提醒规则时发送，不再发送每日汇总。
-    if (alertBlocks.length === 0) return;
-    bodyBlocks.length = 0;
-    bodyBlocks.push(...alertBlocks);
-
-    const pages = packBlocks(bodyBlocks, PAGE_BODY_LIMIT);
+    if (alertItems.length === 0) return;
     const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
 
-    for (let index = 0; index < pages.length; index++) {
-      const pageLabel = pages.length > 1
-        ? `\n📄 分页：${index + 1}/${pages.length}`
-        : "";
+    for (let index = 0; index < alertItems.length; index++) {
+      const item = alertItems[index];
       const text = [
         "🔔 <b>eSIM 到期提醒</b>",
         `🗓 日期：${dateLabel}`,
-        `⚠️ 本次提醒：${alertBlocks.length} 项${pageLabel}`,
+        `⚠️ 本次提醒：${index + 1}/${alertItems.length}`,
         "",
-        pages[index]
+        item.text
       ].join("\n");
+
+      const payload = { chat_id: tgChat, text, parse_mode: "HTML" };
+      if (item.rechargeUrl) {
+        payload.reply_markup = {
+          inline_keyboard: [[{ text: "充值", url: item.rechargeUrl }]]
+        };
+      }
 
       const response = await fetch(tgUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: tgChat,
-          text,
-          parse_mode: "HTML"
-        })
+        body: JSON.stringify(payload)
       });
 
       let result = null;
@@ -2099,7 +2116,7 @@ export default {
         throw new Error(`Telegram sendMessage failed: ${description}`);
       }
 
-      if (index < pages.length - 1) {
+      if (index < alertItems.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, 1100));
       }
     }
