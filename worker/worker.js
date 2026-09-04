@@ -1892,14 +1892,10 @@ export default {
       }
     }
 
-    if (alertBlocks.length > 0) {
-      bodyBlocks.push(
-        "🔔 <b>今日触发的到期提醒</b>",
-        ...alertBlocks
-      );
-    } else if (entries.length > 0) {
-      bodyBlocks.push("✅ 今日没有触发额外到期提醒。");
-    }
+    // 仅在命中卡片的到期提醒规则时发送，不再发送每日汇总。
+    if (alertBlocks.length === 0) return;
+    bodyBlocks.length = 0;
+    bodyBlocks.push(...alertBlocks);
 
     const pages = packBlocks(bodyBlocks, PAGE_BODY_LIMIT);
     const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
@@ -1909,9 +1905,9 @@ export default {
         ? `\n📄 分页：${index + 1}/${pages.length}`
         : "";
       const text = [
-        "📋 <b>eSIM 每日汇总</b>",
+        "🔔 <b>eSIM 到期提醒</b>",
         `🗓 日期：${dateLabel}`,
-        `📦 卡片：${entries.length} 张${pageLabel}`,
+        `⚠️ 本次提醒：${alertBlocks.length} 项${pageLabel}`,
         "",
         pages[index]
       ].join("\n");
