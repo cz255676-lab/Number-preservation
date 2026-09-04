@@ -11,9 +11,9 @@ compatibility_date = "2026-05-31"
 [observability]
 enabled = true
 
-# 自动配置定时任务（每天 UTC 02:00，北京时间 10:00）
+# 自动配置定时任务（每天 UTC 08:00，北京时间 16:00）
 [triggers]
-crons = ["0 2 * * *"]
+crons = ["0 8 * * *"]
 
 # 自动绑定 KV 数据库
 [[kv_namespaces]]
