@@ -114,6 +114,10 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 <button id="btn-add-esim" onclick="openModal()" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-full font-bold shadow-lg transition-colors flex items-center gap-2">
                     <i class="fa-solid fa-plus"></i> 添加号码
                 </button>
+
+                <button id="btn-test-reminder" onclick="sendTestReminder()" class="bg-amber-500 hover:bg-amber-600 text-white px-5 py-2.5 rounded-full font-bold shadow-lg transition-colors flex items-center gap-2" title="向 Telegram 发送一次测试提醒">
+                    <i class="fa-brands fa-telegram"></i> 测试提醒
+                </button>
                 
                 <!-- 账号库 面板按钮 (默认隐藏) -->
                 <button id="btn-add-account" onclick="openAccountModal()" class="hidden bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-full font-bold shadow-lg transition-colors flex items-center gap-2">
@@ -305,6 +309,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         // API 路由前缀
         const WORKER_API_URL = "/api/esims";
         const WORKER_API_ACCOUNT_URL = "/api/accounts";
+        const TEST_REMINDER_API_URL = "/api/reminders/test";
         
         let esimData = []; 
         let accountData = [];
@@ -419,6 +424,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             const viewEsim = document.getElementById('view-esim');
             const viewAccount = document.getElementById('view-account');
             const btnAddEsim = document.getElementById('btn-add-esim');
+            const btnTestReminder = document.getElementById('btn-test-reminder');
             const btnAddAccount = document.getElementById('btn-add-account');
             const btnLockVault = document.getElementById('btn-lock-vault');
 
@@ -431,6 +437,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 viewAccount.classList.add('hidden');
                 
                 btnAddEsim.classList.remove('hidden');
+                btnTestReminder.classList.remove('hidden');
                 btnAddAccount.classList.add('hidden');
                 btnLockVault.classList.add('hidden');
             } else {
@@ -442,6 +449,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 viewEsim.classList.add('hidden');
                 
                 btnAddEsim.classList.add('hidden');
+                btnTestReminder.classList.add('hidden');
                 
                 // 判断保险库是否已解锁
                 if (vaultMasterKey) {
@@ -626,6 +634,33 @@ const HTML_CONTENT = `<!DOCTYPE html>
             document.getElementById('login-container').classList.remove('hidden');
             document.getElementById('main-container').classList.add('hidden');
             lockVault(); // 退出时顺便锁定
+        }
+
+        async function sendTestReminder() {
+            const btn = document.getElementById('btn-test-reminder');
+            const originalHTML = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 发送中...';
+
+            try {
+                const response = await fetch(TEST_REMINDER_API_URL, {
+                    method: 'POST',
+                    headers: getAuthHeaders()
+                });
+                if (response.status === 401) { logout(); return; }
+
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.message || '发送失败');
+                }
+
+                showToast('测试提醒已发送一次');
+            } catch (error) {
+                alert('发送失败：' + (error.message || '请稍后重试'));
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHTML;
+            }
         }
 
         // ================= 数据加载总控 =================
@@ -1498,6 +1533,140 @@ export default {
         }
       } catch (err) {
         return new Response(JSON.stringify({ success: false, message: "校验失败" }), { status: 500, headers: corsHeaders });
+      }
+    }
+
+    // ================= 登录后手动测试提醒 =================
+    if (path === "/api/reminders/test" && request.method === "POST") {
+      const reqToken = request.headers.get("Authorization");
+      if (!reqToken) {
+        return new Response(JSON.stringify({ success: false, message: "请先登录" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      const isValidSession = await env.ESIM_DB.get("session_token_" + reqToken);
+      if (!isValidSession) {
+        return new Response(JSON.stringify({ success: false, message: "登录已过期" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      if (!tgToken || !tgChat) {
+        return new Response(JSON.stringify({ success: false, message: "机器人配置不完整" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      try {
+        const storedEsims = await env.ESIM_DB.get("esim_list", { type: "json" });
+        const esims = Array.isArray(storedEsims) ? storedEsims : [];
+        if (esims.length === 0) {
+          return new Response(JSON.stringify({ success: false, message: "当前没有 eSIM 记录" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+
+        const DAY_MS = 24 * 60 * 60 * 1000;
+        const UTC8_MS = 8 * 60 * 60 * 1000;
+        const escapeTelegramHtml = (value) => String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        const clip = (value, maxLength) => {
+          const text = String(value ?? "").trim();
+          return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+        };
+        const maskPhone = (value) => {
+          const digits = String(value ?? "").replace(/\D/g, "");
+          return digits ? `••••${digits.slice(-4)}` : "未填写";
+        };
+
+        const localNow = new Date(Date.now() + UTC8_MS);
+        const localIso = localNow.toISOString();
+        const dateTimeLabel = `${localIso.slice(0, 10)} ${localIso.slice(11, 16)}`;
+        const todayDay = Math.floor(Date.UTC(
+          localNow.getUTCFullYear(),
+          localNow.getUTCMonth(),
+          localNow.getUTCDate()
+        ) / DAY_MS);
+
+        const cards = esims.slice(0, 10).map((raw, index) => {
+          const sim = raw && typeof raw === "object" ? raw : {};
+          const name = clip(sim.name, 80) || `未命名卡 ${index + 1}`;
+          const expireDate = clip(sim.expireDate, 20) || "未设置";
+          const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(expireDate);
+          const expiryDay = match
+            ? Math.floor(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / DAY_MS)
+            : null;
+          const diffDays = expiryDay === null ? null : expiryDay - todayDay;
+          const advanceParsed = Number.parseInt(sim.notifyAdvance, 10);
+          const advance = Number.isInteger(advanceParsed) && advanceParsed >= 0 ? advanceParsed : 15;
+
+          let statusLine = "到期日期格式无效";
+          if (diffDays !== null) {
+            if (diffDays < 0) statusLine = `已过期 ${Math.abs(diffDays)} 天`;
+            else if (diffDays === 0) statusLine = "今天到期";
+            else if (diffDays <= advance) statusLine = `剩余 ${diffDays} 天，已进入提前 ${advance} 天提醒期`;
+            else statusLine = `剩余 ${diffDays} 天，尚未进入提前 ${advance} 天提醒期`;
+          }
+
+          const lines = [
+            `<b>${index + 1}. ${escapeTelegramHtml(name)}</b>`,
+            `📞 号码：<code>${escapeTelegramHtml(maskPhone(sim.number))}</code>`,
+            `📅 到期：${escapeTelegramHtml(expireDate)}`,
+            `⏳ ${escapeTelegramHtml(statusLine)}`
+          ];
+
+          const remark = clip(sim.remark, 240);
+          const platforms = clip(sim.platforms, 160);
+          if (remark) lines.push(`📝 备注：${escapeTelegramHtml(remark)}`);
+          if (platforms) lines.push(`🌐 平台：${escapeTelegramHtml(platforms)}`);
+          return lines.join("\n");
+        });
+
+        if (esims.length > cards.length) {
+          cards.push(`ℹ️ 另有 ${esims.length - cards.length} 张卡片未在本次测试中展开。`);
+        }
+
+        const text = [
+          "🔔 <b>eSIM 到期提醒（手动测试）</b>",
+          `🗓 发送时间：${dateTimeLabel}（北京时间）`,
+          "✅ 本消息只发送一次，不会改变定时提醒设置。",
+          "",
+          ...cards
+        ].join("\n\n");
+
+        if (text.length > 4000) {
+          throw new Error("测试消息内容过长");
+        }
+
+        const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
+        const tgRes = await fetch(tgUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: tgChat, text, parse_mode: "HTML" })
+        });
+        const tgResult = await tgRes.json().catch(() => null);
+        if (!tgRes.ok || !tgResult || !tgResult.ok) {
+          throw new Error("Telegram 拒绝了消息");
+        }
+
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({
+          success: false,
+          message: err.message || "测试提醒发送失败"
+        }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
       }
     }
 
