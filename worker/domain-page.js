@@ -85,6 +85,9 @@ export const DOMAIN_HTML_CONTENT = `<!DOCTYPE html>
                     <span class="min-h-11 flex items-center gap-2 px-1 text-lg md:text-xl font-extrabold text-white border-b-4 border-amber-300 whitespace-nowrap">
                         <i class="fa-solid fa-globe" aria-hidden="true"></i> 域名资产
                     </span>
+                    <a href="/vpns" class="min-h-11 flex items-center gap-2 px-1 text-lg md:text-xl font-extrabold text-white/75 border-b-4 border-transparent hover:text-white whitespace-nowrap">
+                        <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> VPN 资产
+                    </a>
                 </div>
                 <div class="flex flex-wrap items-center gap-2.5">
                     <span class="text-sm bg-white/55 px-4 py-2.5 rounded-full font-semibold shadow-sm">今日：<span id="current-date" class="text-cyan-900"></span></span>
@@ -289,7 +292,7 @@ export const DOMAIN_HTML_CONTENT = `<!DOCTYPE html>
 
         async function verifyCode() {
             const code = document.getElementById('authCode').value.trim();
-            if (!/^\d{6}$/.test(code)) return showToast('请输入 6 位验证码', true);
+            if (!/^\\d{6}$/.test(code)) return showToast('请输入 6 位验证码', true);
             const btn = document.getElementById('loginBtn');
             const original = btn.innerHTML;
             btn.disabled = true;

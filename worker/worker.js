@@ -1,4 +1,5 @@
 import { DOMAIN_HTML_CONTENT } from "./domain-page.js";
+import { VPN_HTML_CONTENT } from "./vpn-page.js";
 
 // 包含完整前端页面的 HTML 模板字符串
 // 注意：前端代码中的 `${}` 和反引号已被安全转义，以确保 Worker 能正确解析
@@ -80,7 +81,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             <i class="fa-solid fa-shield-halved text-4xl text-blue-600"></i>
         </div>
         <h2 class="text-3xl font-extrabold text-gray-900 mb-2">安全验证</h2>
-        <p class="text-gray-600 mb-8 text-sm font-medium">为保护您的卡片、域名与加密账号资产，请获取验证码登录。</p>
+        <p class="text-gray-600 mb-8 text-sm font-medium">为保护您的卡片、域名、VPN 与加密账号资产，请获取验证码登录。</p>
         
         <div class="mb-6 relative">
             <input type="text" id="authCode" placeholder="输入 6 位数验证码" maxlength="6" class="w-full px-4 py-4 rounded-xl border border-gray-300/50 text-center text-2xl tracking-[0.5em] font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/70 shadow-inner placeholder-gray-400 placeholder:tracking-normal placeholder:text-base">
@@ -98,12 +99,15 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
     <div id="main-container" class="max-w-6xl mx-auto glass-panel rounded-3xl p-6 md:p-10 mt-4 md:mt-8 hidden">
         <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-white/50 pb-4 gap-4">
-            <div class="flex gap-4 md:gap-8 items-center justify-center w-full md:w-auto overflow-x-auto">
+            <div class="flex gap-4 md:gap-8 items-center justify-start md:justify-center w-full md:w-auto overflow-x-auto">
                 <button onclick="switchTab('esim')" id="tab-esim" class="text-xl md:text-2xl font-extrabold text-blue-700 border-b-4 border-blue-600 pb-2 transition-colors flex items-center gap-2 whitespace-nowrap">
                     <i class="fa-solid fa-sim-card"></i> eSIM 资产
                 </button>
                 <a href="/domains" class="text-xl md:text-2xl font-extrabold text-gray-500 border-b-4 border-transparent hover:text-cyan-600 pb-2 transition-colors flex items-center gap-2 whitespace-nowrap opacity-70">
                     <i class="fa-solid fa-globe"></i> 域名资产
+                </a>
+                <a href="/vpns" class="text-xl md:text-2xl font-extrabold text-gray-500 border-b-4 border-transparent hover:text-indigo-600 pb-2 transition-colors flex items-center gap-2 whitespace-nowrap opacity-70">
+                    <i class="fa-solid fa-shield-halved"></i> VPN 资产
                 </a>
                 <button onclick="switchTab('account')" id="tab-account" class="text-xl md:text-2xl font-extrabold text-gray-500 border-b-4 border-transparent hover:text-blue-500 pb-2 transition-colors flex items-center gap-2 whitespace-nowrap opacity-70">
                     <i class="fa-solid fa-vault"></i> 账号库 <i class="fa-solid fa-lock text-sm opacity-50" id="tab-lock-icon"></i>
@@ -1565,6 +1569,13 @@ function normalizeTextField(value, maxLength) {
   return text.length > maxLength ? text.slice(0, maxLength) : text;
 }
 
+function normalizeRequiredTextField(value, maxLength, fieldName) {
+  const text = String(value ?? "").trim();
+  if (!text) throw new Error(`${fieldName}不能为空`);
+  if (text.length > maxLength) throw new Error(`${fieldName}不能超过 ${maxLength} 个字符`);
+  return text;
+}
+
 function normalizeIntegerField(value, fallback, minimum, maximum) {
   if (value === undefined || value === null || value === "") return fallback;
   const text = String(value).trim();
@@ -1607,6 +1618,10 @@ export default {
 
     if (path === "/domains" || path === "/domains/") {
       return new Response(DOMAIN_HTML_CONTENT, { headers: pageHeaders });
+    }
+
+    if (path === "/vpns" || path === "/vpns/") {
+      return new Response(VPN_HTML_CONTENT, { headers: pageHeaders });
     }
 
     let tgToken = env.TG_BOT_TOKEN;
@@ -1957,6 +1972,116 @@ export default {
       }
     }
 
+    // ================= 登录后手动测试 VPN 提醒 =================
+    if (path === "/api/vpn-reminders/test" && request.method === "POST") {
+      const reqToken = request.headers.get("Authorization");
+      const isValidSession = reqToken
+        ? await env.ESIM_DB.get("session_token_" + reqToken)
+        : null;
+      if (!isValidSession) {
+        return new Response(JSON.stringify({ success: false, message: "请先登录" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+      if (!tgToken || !tgChat) {
+        return new Response(JSON.stringify({ success: false, message: "机器人配置不完整" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      try {
+        const storedVpns = await env.ESIM_DB.get("vpn_list", { type: "json" });
+        const vpns = Array.isArray(storedVpns) ? storedVpns : [];
+        if (vpns.length === 0) {
+          return new Response(JSON.stringify({ success: false, message: "当前没有 VPN 记录" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+
+        const escapeTelegramHtml = (value) => String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        const localNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+        const localIso = localNow.toISOString();
+        const dateTimeLabel = `${localIso.slice(0, 10)} ${localIso.slice(11, 16)}`;
+        const todayDay = Math.floor(Date.UTC(
+          localNow.getUTCFullYear(),
+          localNow.getUTCMonth(),
+          localNow.getUTCDate()
+        ) / 86400000);
+
+        const items = vpns.map((raw, index) => {
+          const vpn = raw && typeof raw === "object" ? raw : {};
+          const expiryDay = Math.floor(Date.parse(`${vpn.expireDate}T00:00:00Z`) / 86400000);
+          const diffDays = Number.isFinite(expiryDay) ? expiryDay - todayDay : null;
+          let statusLine = "到期日期格式无效";
+          if (diffDays !== null) {
+            if (diffDays < 0) statusLine = `已过期 ${Math.abs(diffDays)} 天`;
+            else if (diffDays === 0) statusLine = "今天到期";
+            else statusLine = `剩余 ${diffDays} 天`;
+          }
+          const lines = [
+            `<b>${index + 1}. ${escapeTelegramHtml(vpn.name || "未命名 VPN")}</b>`,
+            `🛡 VPN：${escapeTelegramHtml(vpn.name || "未填写")}`,
+            `📅 到期：${escapeTelegramHtml(vpn.expireDate || "未设置")}`,
+            `⏳ ${escapeTelegramHtml(statusLine)}`,
+            `🔁 自动续费：${vpn.autoRenew ? "已开启" : "未开启"}`
+          ];
+          if (vpn.provider) lines.push(`🏢 服务商：${escapeTelegramHtml(normalizeTextField(vpn.provider, 80))}`);
+          if (vpn.accountLabel) lines.push(`👤 账号标识：${escapeTelegramHtml(normalizeTextField(vpn.accountLabel, 80))}`);
+          if (vpn.plan) lines.push(`📦 套餐：${escapeTelegramHtml(normalizeTextField(vpn.plan, 80))}`);
+          if (vpn.cost) lines.push(`💳 费用：${escapeTelegramHtml(normalizeTextField(vpn.cost, 40))}`);
+          if (vpn.remark) lines.push(`📝 备注：${escapeTelegramHtml(normalizeTextField(vpn.remark, 300))}`);
+          return {
+            text: lines.join("\n"),
+            manageUrl: normalizeRechargeUrl(vpn.manageUrl, false)
+          };
+        });
+
+        const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
+        for (let index = 0; index < items.length; index++) {
+          const item = items[index];
+          const text = [
+            "🔔 <b>VPN 到期提醒（手动测试）</b>",
+            `🗓 发送时间：${dateTimeLabel}（北京时间）`,
+            `📋 VPN：${index + 1}/${items.length}`,
+            "✅ 本消息只发送一次，不会改变定时提醒设置。",
+            "",
+            item.text
+          ].join("\n");
+          const payload = { chat_id: tgChat, text, parse_mode: "HTML" };
+          if (item.manageUrl) {
+            payload.reply_markup = {
+              inline_keyboard: [[{ text: "续费 / 管理", url: item.manageUrl }]]
+            };
+          }
+          const response = await fetch(tgUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const result = await response.json().catch(() => null);
+          if (!response.ok || !result || !result.ok) throw new Error("Telegram 拒绝了消息");
+          if (index < items.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1100));
+          }
+        }
+
+        return new Response(JSON.stringify({ success: true, sent: items.length }), {
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ success: false, message: "VPN 测试提醒发送失败，请稍后重试" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+    }
+
     // ================= eSIM 路由 =================
     if (path === "/api/esims") {
       const reqToken = request.headers.get("Authorization");
@@ -2197,6 +2322,166 @@ export default {
             });
           }
           await env.ESIM_DB.put("domain_list", JSON.stringify(domains));
+          return new Response(JSON.stringify({ success: true }), {
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({ success: false, message: "删除失败" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+      }
+    }
+
+    // ================= VPN 路由 =================
+    if (path === "/api/vpns") {
+      const reqToken = request.headers.get("Authorization");
+      if (!reqToken) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+      const isValidSession = await env.ESIM_DB.get("session_token_" + reqToken);
+      if (!isValidSession) {
+        return new Response(JSON.stringify({ error: "Invalid Token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      let vpns;
+      try {
+        const storedVpns = await env.ESIM_DB.get("vpn_list", { type: "json" });
+        vpns = Array.isArray(storedVpns) ? storedVpns : [];
+      } catch (error) {
+        return new Response(JSON.stringify({ error: "KV 未绑定" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      if (request.method === "GET") {
+        return new Response(JSON.stringify(vpns), {
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      if (request.method === "POST") {
+        try {
+          const input = await request.json();
+          const name = normalizeRequiredTextField(input.name, 80, "VPN 名称");
+          const expireDate = normalizeDateText(input.expireDate);
+          if (input.autoRenew !== undefined && typeof input.autoRenew !== "boolean") {
+            throw new Error("自动续费状态不正确");
+          }
+
+          let manageUrl = "";
+          try {
+            manageUrl = normalizeRechargeUrl(input.manageUrl);
+          } catch (error) {
+            return new Response(JSON.stringify({ success: false, message: "管理链接必须是公开的 https:// 地址，且不能包含查询参数或访问密钥" }), {
+              status: 400,
+              headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+          }
+
+          const now = new Date().toISOString();
+          const newVpn = {
+            id: "vpn_" + crypto.randomUUID(),
+            name,
+            provider: normalizeTextField(input.provider, 80),
+            accountLabel: normalizeTextField(input.accountLabel, 80),
+            plan: normalizeTextField(input.plan, 80),
+            expireDate,
+            renewalDays: normalizeIntegerField(input.renewalDays, 365, 1, 3650),
+            cost: normalizeTextField(input.cost, 40),
+            autoRenew: Boolean(input.autoRenew),
+            notifyAdvance: normalizeIntegerField(input.notifyAdvance, 7, 0, 3650),
+            notifyInterval: normalizeIntegerField(input.notifyInterval, 1, 1, 3650),
+            notifyCount: normalizeIntegerField(input.notifyCount, 7, 0, 999),
+            manageUrl,
+            remark: normalizeTextField(input.remark, 300),
+            createdAt: now,
+            updatedAt: now
+          };
+          vpns.push(newVpn);
+          await env.ESIM_DB.put("vpn_list", JSON.stringify(vpns));
+          return new Response(JSON.stringify({ success: true, vpn: newVpn }), {
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({ success: false, message: error.message || "参数错误" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+      }
+
+      if (request.method === "PUT") {
+        try {
+          const input = await request.json();
+          const index = vpns.findIndex((item) => item.id === input.id);
+          if (index === -1) {
+            return new Response(JSON.stringify({ success: false, message: "未找到 VPN" }), {
+              status: 404,
+              headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+          }
+
+          const next = { ...vpns[index] };
+          if (input.name !== undefined) next.name = normalizeRequiredTextField(input.name, 80, "VPN 名称");
+          if (input.provider !== undefined) next.provider = normalizeTextField(input.provider, 80);
+          if (input.accountLabel !== undefined) next.accountLabel = normalizeTextField(input.accountLabel, 80);
+          if (input.plan !== undefined) next.plan = normalizeTextField(input.plan, 80);
+          if (input.expireDate !== undefined) next.expireDate = normalizeDateText(input.expireDate);
+          if (input.renewalDays !== undefined) next.renewalDays = normalizeIntegerField(input.renewalDays, 365, 1, 3650);
+          if (input.cost !== undefined) next.cost = normalizeTextField(input.cost, 40);
+          if (input.remark !== undefined) next.remark = normalizeTextField(input.remark, 300);
+          if (input.autoRenew !== undefined) {
+            if (typeof input.autoRenew !== "boolean") throw new Error("自动续费状态不正确");
+            next.autoRenew = input.autoRenew;
+          }
+          if (input.notifyAdvance !== undefined) next.notifyAdvance = normalizeIntegerField(input.notifyAdvance, 7, 0, 3650);
+          if (input.notifyInterval !== undefined) next.notifyInterval = normalizeIntegerField(input.notifyInterval, 1, 1, 3650);
+          if (input.notifyCount !== undefined) next.notifyCount = normalizeIntegerField(input.notifyCount, 7, 0, 999);
+          if (input.manageUrl !== undefined) {
+            try {
+              next.manageUrl = normalizeRechargeUrl(input.manageUrl);
+            } catch (error) {
+              return new Response(JSON.stringify({ success: false, message: "管理链接必须是公开的 https:// 地址，且不能包含查询参数或访问密钥" }), {
+                status: 400,
+                headers: { "Content-Type": "application/json", ...corsHeaders }
+              });
+            }
+          }
+          next.updatedAt = new Date().toISOString();
+          vpns[index] = next;
+          await env.ESIM_DB.put("vpn_list", JSON.stringify(vpns));
+          return new Response(JSON.stringify({ success: true, vpn: next }), {
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({ success: false, message: error.message || "参数错误" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+      }
+
+      if (request.method === "DELETE") {
+        try {
+          const input = await request.json();
+          const beforeLength = vpns.length;
+          vpns = vpns.filter((item) => item.id !== input.id);
+          if (vpns.length === beforeLength) {
+            return new Response(JSON.stringify({ success: false, message: "未找到 VPN" }), {
+              status: 404,
+              headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+          }
+          await env.ESIM_DB.put("vpn_list", JSON.stringify(vpns));
           return new Response(JSON.stringify({ success: true }), {
             headers: { "Content-Type": "application/json", ...corsHeaders }
           });
@@ -2543,7 +2828,98 @@ export default {
       }
     }
 
-    // eSIM 与域名都只在命中各自规则时发送，不发送每日汇总。
+    let vpns = [];
+    try {
+      const storedVpns = await env.ESIM_DB.get("vpn_list", { type: "json" });
+      vpns = Array.isArray(storedVpns) ? storedVpns : [];
+    } catch (error) {
+      // VPN 数据异常时隔离故障，确保原有 eSIM 与域名提醒仍可发送。
+      vpns = [];
+    }
+    const vpnAlertItems = [];
+
+    const vpnEntries = vpns
+      .map((raw, index) => {
+        const vpn = raw && typeof raw === "object" ? raw : {};
+        const expireDate = clip(vpn.expireDate, 20) || "未设置";
+        const expiryDay = parseExpiryDay(expireDate);
+        return {
+          vpn,
+          name: clip(vpn.name, 80) || `未命名 VPN ${index + 1}`,
+          expireDate,
+          diffDays: expiryDay === null ? null : expiryDay - todayDay,
+          advance: parseInteger(vpn.notifyAdvance, 7, 0),
+          interval: parseInteger(vpn.notifyInterval, 1, 1),
+          maxCount: parseInteger(vpn.notifyCount, 7, 0)
+        };
+      })
+      .sort((a, b) => {
+        const aDays = a.diffDays === null ? Number.POSITIVE_INFINITY : a.diffDays;
+        const bDays = b.diffDays === null ? Number.POSITIVE_INFINITY : b.diffDays;
+        return aDays - bDays;
+      });
+
+    for (const entry of vpnEntries) {
+      if (entry.diffDays === null) continue;
+      const provider = clip(entry.vpn.provider, 80);
+      const accountLabel = clip(entry.vpn.accountLabel, 80);
+      const plan = clip(entry.vpn.plan, 80);
+      const cost = clip(entry.vpn.cost, 40);
+      const remark = clip(entry.vpn.remark, 300);
+      const details = [
+        `🛡 VPN：${escapeTelegramHtml(entry.name)}`,
+        `📅 到期：${escapeTelegramHtml(entry.expireDate)}`,
+        `🔁 自动续费：${entry.vpn.autoRenew ? "已开启" : "未开启"}`
+      ];
+      if (provider) details.splice(1, 0, `🏢 服务商：${escapeTelegramHtml(provider)}`);
+      if (accountLabel) details.push(`👤 账号标识：${escapeTelegramHtml(accountLabel)}`);
+      if (plan) details.push(`📦 套餐：${escapeTelegramHtml(plan)}`);
+      if (cost) details.push(`💳 费用：${escapeTelegramHtml(cost)}`);
+      if (remark) details.push(`📝 备注：${escapeTelegramHtml(remark)}`);
+      const actionHint = entry.vpn.autoRenew
+        ? "请确认自动扣款是否成功。"
+        : "请确认续费安排。";
+
+      if (entry.diffDays > 0 && entry.diffDays <= entry.advance) {
+        const passedDays = entry.advance - entry.diffDays;
+        if (passedDays % entry.interval === 0) {
+          const currentCount = Math.floor(passedDays / entry.interval) + 1;
+          if (entry.maxCount === 0 || currentCount <= entry.maxCount) {
+            const progress = entry.maxCount > 0
+              ? `（第 ${currentCount}/${entry.maxCount} 次）`
+              : "";
+            vpnAlertItems.push({
+              text: [
+                `⚠️ <b>VPN 续费提醒${progress}</b>`,
+                ...details,
+                `⏳ 剩余 ${entry.diffDays} 天，${actionHint}`
+              ].join("\n"),
+              manageUrl: normalizeRechargeUrl(entry.vpn.manageUrl, false)
+            });
+          }
+        }
+      } else if (entry.diffDays === 0) {
+        vpnAlertItems.push({
+          text: [
+            "🚨 <b>VPN 今天到期</b>",
+            ...details,
+            `⏳ 请立即处理，${actionHint}`
+          ].join("\n"),
+          manageUrl: normalizeRechargeUrl(entry.vpn.manageUrl, false)
+        });
+      } else if (entry.diffDays === -7) {
+        vpnAlertItems.push({
+          text: [
+            "❌ <b>VPN 过期警告</b>",
+            ...details,
+            `⏳ 已过期 ${Math.abs(entry.diffDays)} 天。`
+          ].join("\n"),
+          manageUrl: normalizeRechargeUrl(entry.vpn.manageUrl, false)
+        });
+      }
+    }
+
+    // eSIM、域名与 VPN 都只在命中各自规则时发送，不发送每日汇总。
     const outboundItems = [
       ...alertItems.map((item, index) => ({
         text: [
@@ -2566,6 +2942,17 @@ export default {
         ].join("\n"),
         buttonUrl: item.renewalUrl,
         buttonText: "续费"
+      })),
+      ...vpnAlertItems.map((item, index) => ({
+        text: [
+          "🔔 <b>VPN 到期提醒</b>",
+          `🗓 日期：${dateLabel}`,
+          `⚠️ 本次提醒：${index + 1}/${vpnAlertItems.length}`,
+          "",
+          item.text
+        ].join("\n"),
+        buttonUrl: item.manageUrl,
+        buttonText: "续费 / 管理"
       }))
     ];
     if (outboundItems.length === 0) return;
