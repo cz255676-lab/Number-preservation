@@ -1651,7 +1651,7 @@ export default {
           localNow.getUTCDate()
         ) / DAY_MS);
 
-        const cardItems = esims.slice(0, 10).map((raw, index) => {
+        const cardItems = esims.map((raw, index) => {
           const sim = raw && typeof raw === "object" ? raw : {};
           const name = clip(sim.name, 80) || `未命名卡 ${index + 1}`;
           const expireDate = clip(sim.expireDate, 20) || "未设置";
