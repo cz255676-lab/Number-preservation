@@ -42,6 +42,7 @@ const inlineScripts = [...VPN_HTML_CONTENT.matchAll(/<script(?:\s[^>]*)?>([\s\S]
 assert.equal(inlineScripts.length, 1);
 for (const source of inlineScripts) new Function(source);
 assert.ok(inlineScripts[0].includes("if (!/^\\d{6}$/.test(code))"));
+assert.match(VPN_HTML_CONTENT, />续费\/管理<\/a>/);
 
 const pageResponse = await call("/vpns");
 assert.equal(pageResponse.status, 200);
@@ -171,7 +172,7 @@ try {
 }
 assert.equal(telegramPayloads.length, 1);
 assert.match(telegramPayloads[0].text, /VPN 到期提醒/);
-assert.equal(telegramPayloads[0].reply_markup.inline_keyboard[0][0].text, "续费 / 管理");
+assert.equal(telegramPayloads[0].reply_markup.inline_keyboard[0][0].text, "续费/管理");
 
 telegramPayloads.length = 0;
 globalThis.fetch = async (url, options) => {

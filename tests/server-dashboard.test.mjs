@@ -48,6 +48,7 @@ assert.match(SERVER_HTML_CONTENT, /root 密码/);
 assert.match(SERVER_HTML_CONTENT, /不监控在线状态或性能/);
 assert.match(SERVER_HTML_CONTENT, /保存并提醒/);
 assert.match(SERVER_HTML_CONTENT, /续费正常/);
+assert.match(SERVER_HTML_CONTENT, />续费\/管理<\/a>/);
 assert.match(SERVER_HTML_CONTENT, /id="serverHost" type="text" maxlength="120"/);
 assert.match(SERVER_HTML_CONTENT, /id="serverPlan" type="text" maxlength="120"/);
 assert.match(SERVER_HTML_CONTENT, /href="\/vpns"/);
@@ -160,7 +161,7 @@ try {
 assert.equal(telegramPayloads.length, 1);
 assert.match(telegramPayloads[0].text, /云服务器到期提醒/);
 assert.match(telegramPayloads[0].text, /server\.example\.com/);
-assert.equal(telegramPayloads[0].reply_markup.inline_keyboard[0][0].text, "续费 / 管理");
+assert.equal(telegramPayloads[0].reply_markup.inline_keyboard[0][0].text, "续费/管理");
 
 telegramPayloads.length = 0;
 globalThis.fetch = async (url, options) => {

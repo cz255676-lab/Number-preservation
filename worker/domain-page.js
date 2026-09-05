@@ -177,7 +177,7 @@ export const DOMAIN_HTML_CONTENT = `<!DOCTYPE html>
                 <div class="mt-4">
                     <label for="domainRenewalUrl" class="block text-slate-700 text-sm font-bold mb-2">续费/管理链接（选填）</label>
                     <input id="domainRenewalUrl" type="url" maxlength="512" autocomplete="off" placeholder="https://注册商管理页面" class="min-h-11 w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white">
-                    <p class="text-xs text-slate-500 mt-1.5">填写后，看板和 Telegram 提醒中会显示“续费”按钮。</p>
+                    <p class="text-xs text-slate-500 mt-1.5">填写后，看板和 Telegram 提醒中会显示“续费/管理”按钮。</p>
                 </div>
                 <div class="mt-4 mb-6">
                     <label for="domainRemark" class="block text-slate-700 text-sm font-bold mb-2">备注（选填）</label>
@@ -382,7 +382,7 @@ export const DOMAIN_HTML_CONTENT = `<!DOCTYPE html>
                 const registrar = item.registrar ? escapeHtml(item.registrar) : '未填写';
                 const cost = item.annualCost ? '<span><i class="fa-solid fa-receipt mr-1"></i>' + escapeHtml(item.annualCost) + '</span>' : '';
                 const remark = item.remark ? '<div class="mt-3 rounded-xl bg-cyan-50 border border-cyan-100 px-3 py-2.5 text-sm text-slate-700 break-words"><i class="fa-regular fa-comment-dots text-cyan-600 mr-2"></i>' + escapeHtml(item.remark) + '</div>' : '';
-                const renewLink = item.renewalUrl ? '<a href="' + escapeHtml(item.renewalUrl) + '" target="_blank" rel="noopener noreferrer" class="min-h-11 mt-4 flex items-center justify-center gap-2 rounded-xl bg-cyan-700 hover:bg-cyan-800 text-white font-bold"><i class="fa-solid fa-arrow-up-right-from-square"></i>续费 / 管理</a>' : '';
+                const renewLink = item.renewalUrl ? '<a href="' + escapeHtml(item.renewalUrl) + '" target="_blank" rel="noopener noreferrer" class="min-h-11 mt-4 flex items-center justify-center gap-2 rounded-xl bg-cyan-700 hover:bg-cyan-800 text-white font-bold"><i class="fa-solid fa-arrow-up-right-from-square"></i>续费/管理</a>' : '';
                 container.insertAdjacentHTML('beforeend',
                     '<article class="domain-card glass-card rounded-2xl p-5 relative flex flex-col">' +
                     '<div class="absolute top-4 right-4 flex gap-1 bg-white/85 rounded-full p-1 shadow-sm">' +

@@ -253,7 +253,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 <div class="mb-6">
                     <label class="block text-gray-700 text-sm font-bold mb-2">充值链接 (选填)</label>
                     <input type="url" id="simRechargeUrl" maxlength="512" placeholder="https://运营商充值页面" autocomplete="off" class="w-full px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/80">
-                    <p class="text-xs text-gray-500 mt-1.5">填写后，Telegram 提醒消息下方会显示“充值”按钮。</p>
+                    <p class="text-xs text-gray-500 mt-1.5">填写后，Telegram 提醒消息下方会显示“续费/管理”按钮。</p>
                 </div>
                 
                 <button type="submit" id="submitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-colors">
@@ -1839,7 +1839,7 @@ export default {
           const payload = { chat_id: tgChat, text, parse_mode: "HTML" };
           if (item.rechargeUrl) {
             payload.reply_markup = {
-              inline_keyboard: [[{ text: "充值", url: item.rechargeUrl }]]
+              inline_keyboard: [[{ text: "续费/管理", url: item.rechargeUrl }]]
             };
           }
 
@@ -1954,7 +1954,7 @@ export default {
           const payload = { chat_id: tgChat, text, parse_mode: "HTML" };
           if (item.renewalUrl) {
             payload.reply_markup = {
-              inline_keyboard: [[{ text: "续费", url: item.renewalUrl }]]
+              inline_keyboard: [[{ text: "续费/管理", url: item.renewalUrl }]]
             };
           }
           const response = await fetch(tgUrl, {
@@ -2064,7 +2064,7 @@ export default {
           const payload = { chat_id: tgChat, text, parse_mode: "HTML" };
           if (item.manageUrl) {
             payload.reply_markup = {
-              inline_keyboard: [[{ text: "续费 / 管理", url: item.manageUrl }]]
+              inline_keyboard: [[{ text: "续费/管理", url: item.manageUrl }]]
             };
           }
           const response = await fetch(tgUrl, {
@@ -2174,7 +2174,7 @@ export default {
           const payload = { chat_id: tgChat, text, parse_mode: "HTML" };
           if (item.manageUrl) {
             payload.reply_markup = {
-              inline_keyboard: [[{ text: "续费 / 管理", url: item.manageUrl }]]
+              inline_keyboard: [[{ text: "续费/管理", url: item.manageUrl }]]
             };
           }
           const response = await fetch(tgUrl, {
@@ -3299,7 +3299,7 @@ export default {
           item.text
         ].join("\n"),
         buttonUrl: item.rechargeUrl,
-        buttonText: "充值"
+        buttonText: "续费/管理"
       })),
       ...domainAlertItems.map((item, index) => ({
         text: [
@@ -3310,7 +3310,7 @@ export default {
           item.text
         ].join("\n"),
         buttonUrl: item.renewalUrl,
-        buttonText: "续费"
+        buttonText: "续费/管理"
       })),
       ...vpnAlertItems.map((item, index) => ({
         text: [
@@ -3321,7 +3321,7 @@ export default {
           item.text
         ].join("\n"),
         buttonUrl: item.manageUrl,
-        buttonText: "续费 / 管理"
+        buttonText: "续费/管理"
       })),
       ...serverAlertItems.map((item, index) => ({
         text: [
@@ -3332,7 +3332,7 @@ export default {
           item.text
         ].join("\n"),
         buttonUrl: item.manageUrl,
-        buttonText: "续费 / 管理"
+        buttonText: "续费/管理"
       }))
     ];
     if (outboundItems.length === 0) return;

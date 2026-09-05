@@ -35,7 +35,9 @@ async function call(path, options = {}) {
 const pageResponse = await call("/domains");
 assert.equal(pageResponse.status, 200);
 assert.match(pageResponse.headers.get("content-type"), /^text\/html/);
-assert.match(await pageResponse.text(), /域名资产看板/);
+const domainPageHtml = await pageResponse.text();
+assert.match(domainPageHtml, /域名资产看板/);
+assert.match(domainPageHtml, />续费\/管理<\/a>/);
 
 const unauthorized = await call("/api/domains");
 assert.equal(unauthorized.status, 401);
@@ -135,7 +137,7 @@ try {
 
 assert.equal(telegramPayloads.length, 1);
 assert.match(telegramPayloads[0].text, /域名到期提醒/);
-assert.equal(telegramPayloads[0].reply_markup.inline_keyboard[0][0].text, "续费");
+assert.equal(telegramPayloads[0].reply_markup.inline_keyboard[0][0].text, "续费/管理");
 
 telegramPayloads.length = 0;
 const expiredFourteenDaysAgo = new Date(
@@ -182,7 +184,7 @@ try {
 }
 assert.equal(telegramPayloads.length, 1);
 assert.match(telegramPayloads[0].text, /eSIM 到期提醒/);
-assert.equal(telegramPayloads[0].reply_markup.inline_keyboard[0][0].text, "充值");
+assert.equal(telegramPayloads[0].reply_markup.inline_keyboard[0][0].text, "续费/管理");
 
 telegramPayloads.length = 0;
 kv.throwOnGet.add("domain_list");

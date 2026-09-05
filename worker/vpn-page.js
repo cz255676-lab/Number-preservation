@@ -414,7 +414,7 @@ export const VPN_HTML_CONTENT = `<!DOCTYPE html>
                 const cost = item.cost ? '<span><i class="fa-solid fa-receipt mr-1"></i>' + escapeHtml(item.cost) + '</span>' : '';
                 const remark = item.remark ? '<div class="mt-3 rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-2.5 text-sm text-slate-700 break-words"><i class="fa-regular fa-comment-dots text-indigo-600 mr-2"></i>' + escapeHtml(item.remark) + '</div>' : '';
                 const safeManageUrl = safePublicHttpsUrl(item.manageUrl);
-                const manageLink = safeManageUrl ? '<a href="' + escapeHtml(safeManageUrl) + '" target="_blank" rel="noopener noreferrer" class="min-h-11 mt-4 flex items-center justify-center gap-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold"><i class="fa-solid fa-arrow-up-right-from-square"></i>续费 / 管理</a>' : '';
+                const manageLink = safeManageUrl ? '<a href="' + escapeHtml(safeManageUrl) + '" target="_blank" rel="noopener noreferrer" class="min-h-11 mt-4 flex items-center justify-center gap-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-bold"><i class="fa-solid fa-arrow-up-right-from-square"></i>续费/管理</a>' : '';
                 container.insertAdjacentHTML('beforeend',
                     '<article class="vpn-card glass-card rounded-2xl p-5 relative flex flex-col">' +
                     '<div class="absolute top-4 right-4 flex gap-1 bg-white/90 rounded-full p-1 shadow-sm">' +
