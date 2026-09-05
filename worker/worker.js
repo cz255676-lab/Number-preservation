@@ -1,5 +1,6 @@
 import { DOMAIN_HTML_CONTENT } from "./domain-page.js";
 import { VPN_HTML_CONTENT } from "./vpn-page.js";
+import { SERVER_HTML_CONTENT } from "./server-page.js";
 
 // 包含完整前端页面的 HTML 模板字符串
 // 注意：前端代码中的 `${}` 和反引号已被安全转义，以确保 Worker 能正确解析
@@ -81,7 +82,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             <i class="fa-solid fa-shield-halved text-4xl text-blue-600"></i>
         </div>
         <h2 class="text-3xl font-extrabold text-gray-900 mb-2">安全验证</h2>
-        <p class="text-gray-600 mb-8 text-sm font-medium">为保护您的卡片、域名、VPN 与加密账号资产，请获取验证码登录。</p>
+        <p class="text-gray-600 mb-8 text-sm font-medium">为保护您的卡片、域名、VPN、云服务器与加密账号资产，请获取验证码登录。</p>
         
         <div class="mb-6 relative">
             <input type="text" id="authCode" placeholder="输入 6 位数验证码" maxlength="6" class="w-full px-4 py-4 rounded-xl border border-gray-300/50 text-center text-2xl tracking-[0.5em] font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white/70 shadow-inner placeholder-gray-400 placeholder:tracking-normal placeholder:text-base">
@@ -108,6 +109,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 </a>
                 <a href="/vpns" class="text-xl md:text-2xl font-extrabold text-gray-500 border-b-4 border-transparent hover:text-indigo-600 pb-2 transition-colors flex items-center gap-2 whitespace-nowrap opacity-70">
                     <i class="fa-solid fa-shield-halved"></i> VPN 资产
+                </a>
+                <a href="/servers" class="text-xl md:text-2xl font-extrabold text-gray-500 border-b-4 border-transparent hover:text-sky-600 pb-2 transition-colors flex items-center gap-2 whitespace-nowrap opacity-70">
+                    <i class="fa-solid fa-server"></i> 云服务器
                 </a>
                 <button onclick="switchTab('account')" id="tab-account" class="text-xl md:text-2xl font-extrabold text-gray-500 border-b-4 border-transparent hover:text-blue-500 pb-2 transition-colors flex items-center gap-2 whitespace-nowrap opacity-70">
                     <i class="fa-solid fa-vault"></i> 账号库 <i class="fa-solid fa-lock text-sm opacity-50" id="tab-lock-icon"></i>
@@ -1624,6 +1628,10 @@ export default {
       return new Response(VPN_HTML_CONTENT, { headers: pageHeaders });
     }
 
+    if (path === "/servers" || path === "/servers/") {
+      return new Response(SERVER_HTML_CONTENT, { headers: pageHeaders });
+    }
+
     let tgToken = env.TG_BOT_TOKEN;
     let tgChat = env.TG_CHAT_ID;
     
@@ -2082,6 +2090,116 @@ export default {
       }
     }
 
+    // ================= 登录后手动测试云服务器提醒 =================
+    if (path === "/api/server-reminders/test" && request.method === "POST") {
+      const reqToken = request.headers.get("Authorization");
+      const isValidSession = reqToken
+        ? await env.ESIM_DB.get("session_token_" + reqToken)
+        : null;
+      if (!isValidSession) {
+        return new Response(JSON.stringify({ success: false, message: "请先登录" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+      if (!tgToken || !tgChat) {
+        return new Response(JSON.stringify({ success: false, message: "机器人配置不完整" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      try {
+        const storedServers = await env.ESIM_DB.get("server_list", { type: "json" });
+        const servers = Array.isArray(storedServers) ? storedServers : [];
+        if (servers.length === 0) {
+          return new Response(JSON.stringify({ success: false, message: "当前没有云服务器记录" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+
+        const escapeTelegramHtml = (value) => String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        const localNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+        const localIso = localNow.toISOString();
+        const dateTimeLabel = `${localIso.slice(0, 10)} ${localIso.slice(11, 16)}`;
+        const todayDay = Math.floor(Date.UTC(
+          localNow.getUTCFullYear(),
+          localNow.getUTCMonth(),
+          localNow.getUTCDate()
+        ) / 86400000);
+
+        const items = servers.map((raw, index) => {
+          const server = raw && typeof raw === "object" ? raw : {};
+          const expiryDay = Math.floor(Date.parse(`${server.expireDate}T00:00:00Z`) / 86400000);
+          const diffDays = Number.isFinite(expiryDay) ? expiryDay - todayDay : null;
+          let statusLine = "到期日期格式无效";
+          if (diffDays !== null) {
+            if (diffDays < 0) statusLine = `已过期 ${Math.abs(diffDays)} 天`;
+            else if (diffDays === 0) statusLine = "今天到期";
+            else statusLine = `剩余 ${diffDays} 天`;
+          }
+          const lines = [
+            `<b>${index + 1}. ${escapeTelegramHtml(server.name || "未命名服务器")}</b>`,
+            `🖥 云服务器：${escapeTelegramHtml(server.name || "未填写")}`,
+            `📅 到期：${escapeTelegramHtml(server.expireDate || "未设置")}`,
+            `⏳ ${escapeTelegramHtml(statusLine)}`,
+            `🔁 自动续费：${server.autoRenew ? "已开启" : "未开启"}`
+          ];
+          if (server.provider) lines.push(`🏢 服务商：${escapeTelegramHtml(normalizeTextField(server.provider, 80))}`);
+          if (server.host) lines.push(`🌐 IP / 主机名：${escapeTelegramHtml(normalizeTextField(server.host, 120))}`);
+          if (server.plan) lines.push(`📦 地区 / 配置：${escapeTelegramHtml(normalizeTextField(server.plan, 120))}`);
+          if (server.cost) lines.push(`💳 费用：${escapeTelegramHtml(normalizeTextField(server.cost, 40))}`);
+          if (server.remark) lines.push(`📝 备注：${escapeTelegramHtml(normalizeTextField(server.remark, 300))}`);
+          return {
+            text: lines.join("\n"),
+            manageUrl: normalizeRechargeUrl(server.manageUrl, false)
+          };
+        });
+
+        const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
+        for (let index = 0; index < items.length; index++) {
+          const item = items[index];
+          const text = [
+            "🔔 <b>云服务器到期提醒（手动测试）</b>",
+            `🗓 发送时间：${dateTimeLabel}（北京时间）`,
+            `📋 服务器：${index + 1}/${items.length}`,
+            "✅ 本消息只发送一次，不会改变定时提醒设置。",
+            "",
+            item.text
+          ].join("\n");
+          const payload = { chat_id: tgChat, text, parse_mode: "HTML" };
+          if (item.manageUrl) {
+            payload.reply_markup = {
+              inline_keyboard: [[{ text: "续费 / 管理", url: item.manageUrl }]]
+            };
+          }
+          const response = await fetch(tgUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const result = await response.json().catch(() => null);
+          if (!response.ok || !result || !result.ok) throw new Error("Telegram 拒绝了消息");
+          if (index < items.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1100));
+          }
+        }
+
+        return new Response(JSON.stringify({ success: true, sent: items.length }), {
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ success: false, message: "云服务器测试提醒发送失败，请稍后重试" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+    }
+
     // ================= eSIM 路由 =================
     if (path === "/api/esims") {
       const reqToken = request.headers.get("Authorization");
@@ -2482,6 +2600,166 @@ export default {
             });
           }
           await env.ESIM_DB.put("vpn_list", JSON.stringify(vpns));
+          return new Response(JSON.stringify({ success: true }), {
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({ success: false, message: "删除失败" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+      }
+    }
+
+    // ================= 云服务器路由 =================
+    if (path === "/api/servers") {
+      const reqToken = request.headers.get("Authorization");
+      if (!reqToken) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+      const isValidSession = await env.ESIM_DB.get("session_token_" + reqToken);
+      if (!isValidSession) {
+        return new Response(JSON.stringify({ error: "Invalid Token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      let servers;
+      try {
+        const storedServers = await env.ESIM_DB.get("server_list", { type: "json" });
+        servers = Array.isArray(storedServers) ? storedServers : [];
+      } catch (error) {
+        return new Response(JSON.stringify({ error: "KV 未绑定" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      if (request.method === "GET") {
+        return new Response(JSON.stringify(servers), {
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
+      if (request.method === "POST") {
+        try {
+          const input = await request.json();
+          const name = normalizeRequiredTextField(input.name, 80, "服务器名称");
+          const expireDate = normalizeDateText(input.expireDate);
+          if (input.autoRenew !== undefined && typeof input.autoRenew !== "boolean") {
+            throw new Error("自动续费状态不正确");
+          }
+
+          let manageUrl = "";
+          try {
+            manageUrl = normalizeRechargeUrl(input.manageUrl);
+          } catch (error) {
+            return new Response(JSON.stringify({ success: false, message: "管理链接必须是公开的 https:// 地址，且不能包含查询参数或访问密钥" }), {
+              status: 400,
+              headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+          }
+
+          const now = new Date().toISOString();
+          const newServer = {
+            id: "server_" + crypto.randomUUID(),
+            name,
+            provider: normalizeTextField(input.provider, 80),
+            host: normalizeTextField(input.host, 120),
+            plan: normalizeTextField(input.plan, 120),
+            expireDate,
+            renewalDays: normalizeIntegerField(input.renewalDays, 365, 1, 3650),
+            cost: normalizeTextField(input.cost, 40),
+            autoRenew: Boolean(input.autoRenew),
+            notifyAdvance: normalizeIntegerField(input.notifyAdvance, 7, 0, 3650),
+            notifyInterval: normalizeIntegerField(input.notifyInterval, 1, 1, 3650),
+            notifyCount: normalizeIntegerField(input.notifyCount, 7, 0, 999),
+            manageUrl,
+            remark: normalizeTextField(input.remark, 300),
+            createdAt: now,
+            updatedAt: now
+          };
+          servers.push(newServer);
+          await env.ESIM_DB.put("server_list", JSON.stringify(servers));
+          return new Response(JSON.stringify({ success: true, server: newServer }), {
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({ success: false, message: error.message || "参数错误" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+      }
+
+      if (request.method === "PUT") {
+        try {
+          const input = await request.json();
+          const index = servers.findIndex((item) => item.id === input.id);
+          if (index === -1) {
+            return new Response(JSON.stringify({ success: false, message: "未找到服务器" }), {
+              status: 404,
+              headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+          }
+
+          const next = { ...servers[index] };
+          if (input.name !== undefined) next.name = normalizeRequiredTextField(input.name, 80, "服务器名称");
+          if (input.provider !== undefined) next.provider = normalizeTextField(input.provider, 80);
+          if (input.host !== undefined) next.host = normalizeTextField(input.host, 120);
+          if (input.plan !== undefined) next.plan = normalizeTextField(input.plan, 120);
+          if (input.expireDate !== undefined) next.expireDate = normalizeDateText(input.expireDate);
+          if (input.renewalDays !== undefined) next.renewalDays = normalizeIntegerField(input.renewalDays, 365, 1, 3650);
+          if (input.cost !== undefined) next.cost = normalizeTextField(input.cost, 40);
+          if (input.remark !== undefined) next.remark = normalizeTextField(input.remark, 300);
+          if (input.autoRenew !== undefined) {
+            if (typeof input.autoRenew !== "boolean") throw new Error("自动续费状态不正确");
+            next.autoRenew = input.autoRenew;
+          }
+          if (input.notifyAdvance !== undefined) next.notifyAdvance = normalizeIntegerField(input.notifyAdvance, 7, 0, 3650);
+          if (input.notifyInterval !== undefined) next.notifyInterval = normalizeIntegerField(input.notifyInterval, 1, 1, 3650);
+          if (input.notifyCount !== undefined) next.notifyCount = normalizeIntegerField(input.notifyCount, 7, 0, 999);
+          if (input.manageUrl !== undefined) {
+            try {
+              next.manageUrl = normalizeRechargeUrl(input.manageUrl);
+            } catch (error) {
+              return new Response(JSON.stringify({ success: false, message: "管理链接必须是公开的 https:// 地址，且不能包含查询参数或访问密钥" }), {
+                status: 400,
+                headers: { "Content-Type": "application/json", ...corsHeaders }
+              });
+            }
+          }
+          next.updatedAt = new Date().toISOString();
+          servers[index] = next;
+          await env.ESIM_DB.put("server_list", JSON.stringify(servers));
+          return new Response(JSON.stringify({ success: true, server: next }), {
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({ success: false, message: error.message || "参数错误" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders }
+          });
+        }
+      }
+
+      if (request.method === "DELETE") {
+        try {
+          const input = await request.json();
+          const beforeLength = servers.length;
+          servers = servers.filter((item) => item.id !== input.id);
+          if (servers.length === beforeLength) {
+            return new Response(JSON.stringify({ success: false, message: "未找到服务器" }), {
+              status: 404,
+              headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+          }
+          await env.ESIM_DB.put("server_list", JSON.stringify(servers));
           return new Response(JSON.stringify({ success: true }), {
             headers: { "Content-Type": "application/json", ...corsHeaders }
           });
@@ -2919,7 +3197,98 @@ export default {
       }
     }
 
-    // eSIM、域名与 VPN 都只在命中各自规则时发送，不发送每日汇总。
+    let servers = [];
+    try {
+      const storedServers = await env.ESIM_DB.get("server_list", { type: "json" });
+      servers = Array.isArray(storedServers) ? storedServers : [];
+    } catch (error) {
+      // 云服务器数据异常时隔离故障，确保其他资产提醒仍可发送。
+      servers = [];
+    }
+    const serverAlertItems = [];
+
+    const serverEntries = servers
+      .map((raw, index) => {
+        const server = raw && typeof raw === "object" ? raw : {};
+        const expireDate = clip(server.expireDate, 20) || "未设置";
+        const expiryDay = parseExpiryDay(expireDate);
+        return {
+          server,
+          name: clip(server.name, 80) || `未命名服务器 ${index + 1}`,
+          expireDate,
+          diffDays: expiryDay === null ? null : expiryDay - todayDay,
+          advance: parseInteger(server.notifyAdvance, 7, 0),
+          interval: parseInteger(server.notifyInterval, 1, 1),
+          maxCount: parseInteger(server.notifyCount, 7, 0)
+        };
+      })
+      .sort((a, b) => {
+        const aDays = a.diffDays === null ? Number.POSITIVE_INFINITY : a.diffDays;
+        const bDays = b.diffDays === null ? Number.POSITIVE_INFINITY : b.diffDays;
+        return aDays - bDays;
+      });
+
+    for (const entry of serverEntries) {
+      if (entry.diffDays === null) continue;
+      const provider = clip(entry.server.provider, 80);
+      const host = clip(entry.server.host, 120);
+      const plan = clip(entry.server.plan, 120);
+      const cost = clip(entry.server.cost, 40);
+      const remark = clip(entry.server.remark, 300);
+      const details = [
+        `🖥 云服务器：${escapeTelegramHtml(entry.name)}`,
+        `📅 到期：${escapeTelegramHtml(entry.expireDate)}`,
+        `🔁 自动续费：${entry.server.autoRenew ? "已开启" : "未开启"}`
+      ];
+      if (provider) details.splice(1, 0, `🏢 服务商：${escapeTelegramHtml(provider)}`);
+      if (host) details.push(`🌐 IP / 主机名：${escapeTelegramHtml(host)}`);
+      if (plan) details.push(`📦 地区 / 配置：${escapeTelegramHtml(plan)}`);
+      if (cost) details.push(`💳 费用：${escapeTelegramHtml(cost)}`);
+      if (remark) details.push(`📝 备注：${escapeTelegramHtml(remark)}`);
+      const actionHint = entry.server.autoRenew
+        ? "请确认自动扣款是否成功。"
+        : "请确认续费安排。";
+
+      if (entry.diffDays > 0 && entry.diffDays <= entry.advance) {
+        const passedDays = entry.advance - entry.diffDays;
+        if (passedDays % entry.interval === 0) {
+          const currentCount = Math.floor(passedDays / entry.interval) + 1;
+          if (entry.maxCount === 0 || currentCount <= entry.maxCount) {
+            const progress = entry.maxCount > 0
+              ? `（第 ${currentCount}/${entry.maxCount} 次）`
+              : "";
+            serverAlertItems.push({
+              text: [
+                `⚠️ <b>云服务器续费提醒${progress}</b>`,
+                ...details,
+                `⏳ 剩余 ${entry.diffDays} 天，${actionHint}`
+              ].join("\n"),
+              manageUrl: normalizeRechargeUrl(entry.server.manageUrl, false)
+            });
+          }
+        }
+      } else if (entry.diffDays === 0) {
+        serverAlertItems.push({
+          text: [
+            "🚨 <b>云服务器今天到期</b>",
+            ...details,
+            `⏳ 请立即处理，${actionHint}`
+          ].join("\n"),
+          manageUrl: normalizeRechargeUrl(entry.server.manageUrl, false)
+        });
+      } else if (entry.diffDays === -7) {
+        serverAlertItems.push({
+          text: [
+            "❌ <b>云服务器过期警告</b>",
+            ...details,
+            `⏳ 已过期 ${Math.abs(entry.diffDays)} 天。`
+          ].join("\n"),
+          manageUrl: normalizeRechargeUrl(entry.server.manageUrl, false)
+        });
+      }
+    }
+
+    // 所有资产都只在命中各自规则时发送，不发送每日汇总。
     const outboundItems = [
       ...alertItems.map((item, index) => ({
         text: [
@@ -2948,6 +3317,17 @@ export default {
           "🔔 <b>VPN 到期提醒</b>",
           `🗓 日期：${dateLabel}`,
           `⚠️ 本次提醒：${index + 1}/${vpnAlertItems.length}`,
+          "",
+          item.text
+        ].join("\n"),
+        buttonUrl: item.manageUrl,
+        buttonText: "续费 / 管理"
+      })),
+      ...serverAlertItems.map((item, index) => ({
+        text: [
+          "🔔 <b>云服务器到期提醒</b>",
+          `🗓 日期：${dateLabel}`,
+          `⚠️ 本次提醒：${index + 1}/${serverAlertItems.length}`,
           "",
           item.text
         ].join("\n"),

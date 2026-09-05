@@ -52,7 +52,7 @@ export const VPN_HTML_CONTENT = `<!DOCTYPE html>
     </style>
 </head>
 <body class="text-slate-800 font-sans p-4 md:p-8">
-    <div id="toast-container" class="fixed top-5 right-5 z-[70] flex flex-col gap-3 max-w-[calc(100vw-2.5rem)]"></div>
+    <div id="toast-container" role="status" aria-live="polite" class="fixed top-5 right-5 z-[70] flex flex-col gap-3 max-w-[calc(100vw-2.5rem)]"></div>
 
     <main>
         <section id="login-container" class="max-w-md mx-auto glass-panel rounded-3xl p-8 md:p-10 mt-16 md:mt-28 text-center">
@@ -88,6 +88,9 @@ export const VPN_HTML_CONTENT = `<!DOCTYPE html>
                     <span class="min-h-11 flex items-center gap-2 px-1 text-lg md:text-xl font-extrabold text-white border-b-4 border-emerald-300 whitespace-nowrap" aria-current="page">
                         <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> VPN 资产
                     </span>
+                    <a href="/servers" class="min-h-11 flex items-center gap-2 px-1 text-lg md:text-xl font-extrabold text-white/75 border-b-4 border-transparent hover:text-white whitespace-nowrap">
+                        <i class="fa-solid fa-server" aria-hidden="true"></i> 云服务器
+                    </a>
                 </nav>
                 <div class="flex flex-wrap items-center gap-2.5">
                     <span class="text-sm bg-white/55 px-4 py-2.5 rounded-full font-semibold shadow-sm">今日：<span id="current-date" class="text-indigo-950"></span></span>
@@ -338,6 +341,13 @@ export const VPN_HTML_CONTENT = `<!DOCTYPE html>
         function logout() {
             localStorage.removeItem('esim_auth_token');
             vpns = [];
+            editingVpnId = null;
+            pendingConfirmAction = null;
+            ['vpnModal', 'confirmModal'].forEach(function (id) {
+                const modal = document.getElementById(id);
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            });
             showLogin();
         }
 

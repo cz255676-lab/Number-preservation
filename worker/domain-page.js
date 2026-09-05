@@ -88,6 +88,9 @@ export const DOMAIN_HTML_CONTENT = `<!DOCTYPE html>
                     <a href="/vpns" class="min-h-11 flex items-center gap-2 px-1 text-lg md:text-xl font-extrabold text-white/75 border-b-4 border-transparent hover:text-white whitespace-nowrap">
                         <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> VPN 资产
                     </a>
+                    <a href="/servers" class="min-h-11 flex items-center gap-2 px-1 text-lg md:text-xl font-extrabold text-white/75 border-b-4 border-transparent hover:text-white whitespace-nowrap">
+                        <i class="fa-solid fa-server" aria-hidden="true"></i> 云服务器
+                    </a>
                 </div>
                 <div class="flex flex-wrap items-center gap-2.5">
                     <span class="text-sm bg-white/55 px-4 py-2.5 rounded-full font-semibold shadow-sm">今日：<span id="current-date" class="text-cyan-900"></span></span>
